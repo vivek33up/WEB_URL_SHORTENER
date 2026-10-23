@@ -34,25 +34,50 @@ router.get('/codes',ensureAuthenticated, async function(req,res){
 
 router.delete('/:id',ensureAuthenticated, async function(req,res){
     const id=req.params.id;
-    const result=await db.delete(urlsTable).where(and(
+    const [deletedUrl]=await db.delete(urlsTable).where(and(
         eq(urlsTable.id,id),
         eq(urlsTable.userId,req.user.id)
-    ))
+    )).returning({shortCode: urlsTable.shortCode})
+
+    if(!deletedUrl){
+        return res.status(404).json({error:'URL not found'})
+    }
+
+    try {
+        if(redisClient.isOpen){
+            await redisClient.del(`url:${deletedUrl.shortCode}`)
+        }
+    } catch(error) {
+        console.error('Redis cache invalidation failed:', error)
+    }
     return res.status(200).json({deleted:true})
 })
 
 router.get('/:shortCode', async function(req,res){
     const shortCode=req.params.shortCode;
     const cacheKey=`url:${shortCode}`;
-    const cachedTargetUrl=await redisClient.get(cacheKey);
+    let cachedTargetUrl;
+    try {
+        if(redisClient.isOpen){
+            cachedTargetUrl=await redisClient.get(cacheKey);
+        }
+    } catch(error) {
+        console.error('Redis read failed:', error)
+    }
     if(cachedTargetUrl){
         return res.redirect(cachedTargetUrl);
     }
     const [result]=await db.select({targetURL:urlsTable.targetUrl}).from(urlsTable).where(eq(urlsTable.shortCode,shortCode))
     if(!result)return res.status(404).json({error:"Invalid URL"})
-    await redisClient.set(cacheKey, result.targetURL, {
-        EX: 60*60,
-    });
+    try {
+        if(redisClient.isOpen){
+            await redisClient.set(cacheKey, result.targetURL, {
+                EX: 60*60,
+            });
+        }
+    } catch(error) {
+        console.error('Redis write failed:', error)
+    }
     return res.redirect(result.targetURL)
     
 })
