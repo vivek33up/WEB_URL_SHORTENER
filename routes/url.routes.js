@@ -5,6 +5,7 @@ import {db} from "../db/index.js"
 import { nanoid } from 'nanoid';
 import { ensureAuthenticated } from '../middlewares/auth.middleware.js';
 import {and, eq } from "drizzle-orm";
+import { redisClient } from "../redis/index.js";
 const router=express.Router()
 
 
@@ -42,8 +43,16 @@ router.delete('/:id',ensureAuthenticated, async function(req,res){
 
 router.get('/:shortCode', async function(req,res){
     const shortCode=req.params.shortCode;
+    const cacheKey=`url:${shortCode}`;
+    const cachedTargetUrl=await redisClient.get(cacheKey);
+    if(cachedTargetUrl){
+        return res.redirect(cachedTargetUrl);
+    }
     const [result]=await db.select({targetURL:urlsTable.targetUrl}).from(urlsTable).where(eq(urlsTable.shortCode,shortCode))
     if(!result)return res.status(404).json({error:"Invalid URL"})
+    await redisClient.set(cacheKey, result.targetURL, {
+        EX: 60*60,
+    });
     return res.redirect(result.targetURL)
     
 })
